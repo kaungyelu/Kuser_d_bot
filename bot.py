@@ -1,45 +1,43 @@
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import os
 import re
 import threading
-import requests
 import time
+import requests
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or "YOUR_BOT_TOKEN_HERE"
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+PORT = int(os.environ.get('PORT', 8443))
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler for the /start command"""
+async def start_command(update: Update, context: CallbackContext):
     await update.message.reply_text("ကျေးဇူးပြု၍ လင့်ခ်တစ်ခုပေးပို့ပါ")
 
-async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler for when user sends a link"""
+async def handle_link(update: Update, context: CallbackContext):
     message_text = update.message.text
     
     if re.match(r'https?://\S+', message_text):
         processing_msg = await update.message.reply_text("ခနစောင့်ပါ...")
+        await asyncio.sleep(3)
         await context.bot.delete_message(chat_id=update.effective_chat.id, 
-                                        message_id=processing_msg.message_id)
+                                      message_id=processing_msg.message_id)
         
         loading_msg = await update.message.reply_text("Loading Process...\n0% [░░░░░░░░░░]")
         
-        # Run the test in background
         thread = threading.Thread(target=run_test, 
-                                args=(update, context, message_text, loading_msg))
+                               args=(update, context, message_text, loading_msg))
         thread.start()
     else:
         await update.message.reply_text("လင့်ခ်မှန်ကန်စွာပေးပို့ပါ")
 
-def run_test(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str, loading_msg):
-    """Function to run the test and update progress"""
+def run_test(update: Update, context: CallbackContext, url: str, loading_msg):
     total_requests = 50
     threads_count = 20
     completed = 0
     
     def send_request(url):
         try:
-            requests.get(url)
-        except Exception as e:
+            requests.get(url, timeout=5)
+        except:
             pass
     
     def update_progress(percent):
@@ -50,7 +48,7 @@ def run_test(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str, loadi
                                     message_id=loading_msg.message_id,
                                     text=progress_text)
     
-    for i in range(5):  # 5 batches of 10 requests (total 50)
+    for _ in range(5):
         threads = []
         for _ in range(threads_count):
             t = threading.Thread(target=send_request, args=(url,))
@@ -63,22 +61,26 @@ def run_test(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str, loadi
         completed += 10
         percent = min(100, int((completed/total_requests)*100))
         update_progress(percent)
-        time.sleep(0.5)
+        time.sleep(1)
     
-    # Completion message
     context.bot.edit_message_text(chat_id=update.effective_chat.id,
                                 message_id=loading_msg.message_id,
                                 text="လုပ်ဆောင်မှုပြီးမြောက်ပါပြီ ✓\nThreads: 20 | Requests: 50")
 
 def main():
-    """Start the bot"""
-    application = Application.builder().token(TOKEN).build()
+    updater = Updater(TOKEN, use_context=True)
+    dp = updater.dispatcher
     
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
+    dp.add_handler(CommandHandler("start", start_command))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_link))
     
-    print("Bot is running...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Railway deployment settings
+    updater.start_webhook(listen="0.0.0.0",
+                         port=PORT,
+                         url_path=TOKEN,
+                         webhook_url=f"https://your-app-name.railway.app/{TOKEN}")
+    
+    updater.idle()
 
 if __name__ == "__main__":
     main()
