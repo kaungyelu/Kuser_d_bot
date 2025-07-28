@@ -1,19 +1,10 @@
 import os
 import re
-import threading
-import time
-import requests
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-class TestSession:
-    def __init__(self):
-        self.active = False
-        self.countdown_value = 60
-        self.progress = 0
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("ကျေးဇူးပြု၍ လင့်ခ်တစ်ခုပေးပို့ပါ")
@@ -23,98 +14,67 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
     if re.match(r'https?://\S+', message_text):
-        # Initialize new test session
-        context.user_data['session'] = TestSession()
-        context.user_data['session'].active = True
         context.user_data['url'] = message_text
+        context.user_data['active'] = True
         
         # Send countdown message
         countdown_msg = await update.message.reply_text("ခနစောင့်ပါ...\n1:00")
         context.user_data['countdown_msg_id'] = countdown_msg.message_id
         
-        # Start countdown in background
+        # Start countdown and test
         asyncio.create_task(run_countdown(update, context, chat_id))
+        asyncio.create_task(run_test(update, context, chat_id))
     else:
         await update.message.reply_text("လင့်ခ်မှန်ကန်စွာပေးပို့ပါ")
 
 async def run_countdown(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id):
-    session = context.user_data.get('session')
-    if not session:
-        return
-    
-    countdown_msg_id = context.user_data['countdown_msg_id']
-    
     for i in range(60, -1, -1):
-        if not session.active:
+        if not context.user_data.get('active', False):
             break
             
-        session.countdown_value = i
         minutes = i // 60
         seconds = i % 60
         
         try:
             await context.bot.edit_message_text(
                 chat_id=chat_id,
-                message_id=countdown_msg_id,
+                message_id=context.user_data['countdown_msg_id'],
                 text=f"ခနစောင့်ပါ...\n{minutes}:{seconds:02d}"
             )
-        except Exception as e:
-            print(f"Error editing message: {e}")
+        except:
             break
         
         await asyncio.sleep(1)
     
-    # Countdown finished, start progress
-    if session.active:
-        await start_progress(update, context, chat_id)
-
-async def start_progress(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id):
-    session = context.user_data.get('session')
-    if not session or not session.active:
-        return
-    
-    # Delete countdown message
-    try:
-        await context.bot.delete_message(
-            chat_id=chat_id,
-            message_id=context.user_data['countdown_msg_id']
-        )
-    except:
-        pass
-    
-    # Send progress message
-    progress_msg = await context.bot.send_message(
-        chat_id=chat_id,
-        text="Loading Process...\n0% [░░░░░░░░░░]"
-    )
-    context.user_data['progress_msg_id'] = progress_msg.message_id
-    
-    # Run progress update
-    await update_progress(update, context, chat_id)
-
-async def update_progress(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id):
-    session = context.user_data.get('session')
-    if not session or not session.active:
-        return
-    
-    progress_msg_id = context.user_data['progress_msg_id']
-    url = context.user_data['url']
-    duration = 60  # 1 minute
-    start_time = time.time()
-    
-    def send_request():
+    # Countdown finished
+    if context.user_data.get('active', False):
         try:
-            requests.get(url, timeout=5)
+            await context.bot.delete_message(
+                chat_id=chat_id,
+                message_id=context.user_data['countdown_msg_id']
+            )
         except:
             pass
+
+async def run_test(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id):
+    # Wait until countdown reaches 30 seconds
+    await asyncio.sleep(30)
     
-    while time.time() - start_time < duration:
-        if not session.active:
+    if not context.user_data.get('active', False):
+        return
+    
+    # Send progress message
+    progress_msg = await update.message.reply_text("Loading Process...\n0% [░░░░░░░░░░]")
+    context.user_data['progress_msg_id'] = progress_msg.message_id
+    
+    # Run progress for 1 minute
+    start_time = time.time()
+    while time.time() - start_time < 60:
+        if not context.user_data.get('active', False):
             break
             
         elapsed = time.time() - start_time
-        percent = min(100, int((elapsed/duration)*100))
-        session.progress = percent
+        percent = min(100, int((elapsed/60)*100))
         
         bars = '█' * int(percent/10)
         spaces = '░' * (10 - int(percent/10))
@@ -122,29 +82,22 @@ async def update_progress(update: Update, context: ContextTypes.DEFAULT_TYPE, ch
         try:
             await context.bot.edit_message_text(
                 chat_id=chat_id,
-                message_id=progress_msg_id,
+                message_id=context.user_data['progress_msg_id'],
                 text=f"Loading Process...\n{percent}% [{bars}{spaces}]"
             )
-            
-            # Send requests in background
-            threading.Thread(target=send_request).start()
-            
-        except Exception as e:
-            print(f"Error updating progress: {e}")
+        except:
             break
         
         await asyncio.sleep(1)
     
     # Test completed
-    if session.active:
+    if context.user_data.get('active', False):
         await show_results(update, context, chat_id)
 
 async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id):
-    session = context.user_data.get('session')
-    if not session:
-        return
+    context.user_data['active'] = False
     
-    # Delete progress message after delay
+    # Delete progress message after 10 seconds
     await asyncio.sleep(10)
     try:
         await context.bot.delete_message(
@@ -154,7 +107,7 @@ async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_
     except:
         pass
     
-    # Send results with Again button
+    # Send results
     keyboard = [[InlineKeyboardButton("Again", callback_data="test_again")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -163,26 +116,22 @@ async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_
         text="လုပ်ဆောင်မှုပြီးမြောက်ပါပြီ ✓\nThreads: 20 | Requests: 50",
         reply_markup=reply_markup
     )
-    
-    # Clean up session
-    session.active = False
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    chat_id = query.message.chat_id
     
     if query.data == "test_again":
-        # Delete old result message
+        # Delete old message
         try:
             await context.bot.delete_message(
-                chat_id=chat_id,
+                chat_id=query.message.chat_id,
                 message_id=query.message.message_id
             )
         except:
             pass
         
-        # Restart the process
+        # Restart
         if 'url' in context.user_data:
             await handle_link(update, context)
 
@@ -197,4 +146,5 @@ def main():
     application.run_polling()
 
 if __name__ == "__main__":
+    import time
     main()
