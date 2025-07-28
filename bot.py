@@ -7,7 +7,6 @@ from telegram import Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-PORT = int(os.environ.get('PORT', 8443))
 
 async def start_command(update: Update, context: CallbackContext):
     await update.message.reply_text("ကျေးဇူးပြု၍ လင့်ခ်တစ်ခုပေးပို့ပါ")
@@ -67,6 +66,7 @@ def run_test(update: Update, context: CallbackContext, url: str, loading_msg):
                                 message_id=loading_msg.message_id,
                                 text="လုပ်ဆောင်မှုပြီးမြောက်ပါပြီ ✓\nThreads: 20 | Requests: 50")
 
+
 def main():
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
@@ -74,12 +74,8 @@ def main():
     dp.add_handler(CommandHandler("start", start_command))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_link))
     
-    # Railway deployment settings
-    updater.start_webhook(listen="0.0.0.0",
-                         port=PORT,
-                         url_path=TOKEN,
-                         webhook_url=f"https://your-app-name.railway.app/{TOKEN}")
-    
+    # Polling နည်းလမ်း သုံးမည်
+    updater.start_polling()
     updater.idle()
 
 if __name__ == "__main__":
