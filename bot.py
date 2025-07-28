@@ -4,9 +4,8 @@ import threading
 import time
 import requests
 import asyncio
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
@@ -15,92 +14,114 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("ကျေးဇူးပြု၍ လင့်ခ်တစ်ခုပေးပို့ပါ")
 
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle incoming links with proper progress tracking"""
+    """Handle incoming links"""
     message_text = update.message.text
     
-    if not re.match(r'https?://\S+', message_text):
+    if re.match(r'https?://\S+', message_text):
+        context.user_data['url'] = message_text  # Store URL for later use
+        await countdown_timer(update, context)
+    else:
         await update.message.reply_text("လင့်ခ်မှန်ကန်စွာပေးပို့ပါ")
-        return
 
-    # Show initial processing message
+async def countdown_timer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show countdown from 1:00 to 0:00"""
     processing_msg = await update.message.reply_text("ခနစောင့်ပါ...")
-    await asyncio.sleep(2)
-    await context.bot.delete_message(chat_id=update.effective_chat.id, 
-                                  message_id=processing_msg.message_id)
     
-    # Initialize progress message
-    loading_msg = await update.message.reply_text("Loading Process...\n0% [░░░░░░░░░░]")
-    
-    # Run test in background with proper error handling
-    try:
-        thread = threading.Thread(target=run_test_with_progress, 
-                               args=(update, context, message_text, loading_msg))
-        thread.start()
-    except Exception as e:
+    for i in range(60, -1, -1):
+        minutes = i // 60
+        seconds = i % 60
         await context.bot.edit_message_text(
             chat_id=update.effective_chat.id,
-            message_id=loading_msg.message_id,
-            text=f"Error: {str(e)}"
+            message_id=processing_msg.message_id,
+            text=f"ခနစောင့်ပါ...\n{minutes}:{seconds:02d}"
         )
+        await asyncio.sleep(1)
+    
+    await start_test(update, context, processing_msg)
 
-def run_test_with_progress(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str, loading_msg):
-    """Improved version with guaranteed 100% progress"""
+async def start_test(update: Update, context: ContextTypes.DEFAULT_TYPE, processing_msg):
+    """Start the test after countdown"""
+    url = context.user_data['url']
+    loading_msg = await update.message.reply_text("Loading Process...\n0% [░░░░░░░░░░]")
+    
+    thread = threading.Thread(target=run_test, 
+                           args=(update, context, url, loading_msg, processing_msg))
+    thread.start()
+
+def run_test(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str, loading_msg, processing_msg):
+    """Run the URL test"""
     total_requests = 50
+    threads_count = 20
     completed = 0
     
-    def send_request(target_url):
-        """Send request with retry logic"""
+    def send_request(url):
         try:
-            requests.get(target_url, timeout=10)
-            return True
+            requests.get(url, timeout=5)
         except:
-            return False
+            pass
     
-    def update_progress(current, total):
-        """Update progress bar with percentage"""
-        percent = min(100, int((current/total)*100))
+    def update_progress(percent):
         bars = '█' * int(percent/10)
         spaces = '░' * (10 - int(percent/10))
         progress_text = f"Loading Process...\n{percent}% [{bars}{spaces}]"
-        
-        try:
-            context.bot.edit_message_text(
-                chat_id=update.effective_chat.id,
-                message_id=loading_msg.message_id,
-                text=progress_text
-            )
-        except:
-            pass  # Prevent crash if message edit fails
-
-    # Use ThreadPoolExecutor for better control
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(send_request, url) for _ in range(total_requests)]
-        
-        for future in as_completed(futures, timeout=60):
-            if future.result():
-                completed += 1
-            update_progress(completed, total_requests)
-            time.sleep(0.1)  # Smooth progress update
+        context.bot.edit_message_text(
+            chat_id=update.effective_chat.id,
+            message_id=loading_msg.message_id,
+            text=progress_text
+        )
     
-    # Ensure 100% is shown even if some requests failed
-    update_progress(total_requests, total_requests)
+    # Run test for 10 seconds
+    start_time = time.time()
+    while time.time() - start_time < 10:
+        threads = []
+        for _ in range(threads_count):
+            t = threading.Thread(target=send_request, args=(url,))
+            threads.append(t)
+            t.start()
+        
+        for t in threads:
+            t.join()
+        
+        completed += 10
+        percent = min(100, int((completed/total_requests)*100))
+        update_progress(percent)
+        time.sleep(1)
     
-    # Final completion message
+    # Show completion message with "Again" button
+    keyboard = [[InlineKeyboardButton("Again", callback_data="test_again")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     context.bot.edit_message_text(
         chat_id=update.effective_chat.id,
         message_id=loading_msg.message_id,
-        text="လုပ်ဆောင်မှုပြီးမြောက်ပါပြီ ✓\nThreads: 10 | Requests: 50"
+        text=f"လုပ်ဆောင်မှုပြီးမြောက်ပါပြီ ✓\nThreads: 20 | Requests: 50",
+        reply_markup=reply_markup
+    )
+    
+    # Delete the processing message
+    context.bot.delete_message(
+        chat_id=update.effective_chat.id,
+        message_id=processing_msg.message_id
     )
 
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle button callbacks"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "test_again":
+        await countdown_timer(update, context)
+
 def main():
-    """Start the bot with proper initialization"""
+    """Start the bot"""
     application = Application.builder().token(TOKEN).build()
     
     # Add handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
+    application.add_handler(CallbackQueryHandler(button_callback))
     
-    print("Bot is running with improved progress tracking...")
+    print("Bot is running...")
     application.run_polling()
 
 if __name__ == "__main__":
