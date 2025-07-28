@@ -3,8 +3,9 @@ import re
 import threading
 import time
 import requests
+import asyncio
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram.ext import Updater, CommandHandler, MessageHandler, filters, CallbackContext
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
@@ -66,15 +67,13 @@ def run_test(update: Update, context: CallbackContext, url: str, loading_msg):
                                 message_id=loading_msg.message_id,
                                 text="လုပ်ဆောင်မှုပြီးမြောက်ပါပြီ ✓\nThreads: 20 | Requests: 50")
 
-
 def main():
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
     
     dp.add_handler(CommandHandler("start", start_command))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_link))
+    dp.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
     
-    # Polling နည်းလမ်း သုံးမည်
     updater.start_polling()
     updater.idle()
 
