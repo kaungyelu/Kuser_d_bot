@@ -19,36 +19,66 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if re.match(r'https?://\S+', message_text):
         context.user_data['url'] = message_text
-        await start_test_sequence(update, context)
+        await start_countdown(update, context)
     else:
         await update.message.reply_text("လင့်ခ်မှန်ကန်စွာပေးပို့ပါ")
 
-async def start_test_sequence(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start the test sequence with countdown and progress"""
-    # Send initial messages
+async def start_countdown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start the countdown from 1:00 to 0:00"""
     countdown_msg = await update.message.reply_text("ခနစောင့်ပါ...\n1:00")
-    progress_msg = await update.message.reply_text("Loading Process...\n0% [░░░░░░░░░░]")
-    
-    # Store message IDs for later editing
     context.user_data['countdown_msg_id'] = countdown_msg.message_id
-    context.user_data['progress_msg_id'] = progress_msg.message_id
     
-    # Start test in background
-    thread = threading.Thread(target=run_test_with_countdown, 
-                           args=(update, context))
+    # Run countdown in background
+    thread = threading.Thread(target=run_countdown, args=(update, context))
     thread.start()
 
-def run_test_with_countdown(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Run the test with countdown timer and progress bar"""
-    url = context.user_data['url']
+def run_countdown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Run the countdown timer"""
     countdown_msg_id = context.user_data['countdown_msg_id']
-    progress_msg_id = context.user_data['progress_msg_id']
     
+    for i in range(60, -1, -1):
+        minutes = i // 60
+        seconds = i % 60
+        context.bot.edit_message_text(
+            chat_id=update.effective_chat.id,
+            message_id=countdown_msg_id,
+            text=f"ခနစောင့်ပါ...\n{minutes}:{seconds:02d}"
+        )
+        time.sleep(1)
+    
+    # Countdown finished, start progress bar
+    start_progress_bar(update, context)
+
+def start_progress_bar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start the progress bar after countdown"""
+    # Delete countdown message
+    try:
+        context.bot.delete_message(
+            chat_id=update.effective_chat.id,
+            message_id=context.user_data['countdown_msg_id']
+        )
+    except:
+        pass
+    
+    # Send progress bar
+    progress_msg = context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Loading Process...\n0% [░░░░░░░░░░]"
+    )
+    context.user_data['progress_msg_id'] = progress_msg.message_id
+    
+    # Run test in background
+    thread = threading.Thread(target=run_test, args=(update, context))
+    thread.start()
+
+def run_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Run the test with progress bar"""
+    url = context.user_data['url']
+    progress_msg_id = context.user_data['progress_msg_id']
     total_requests = 50
     threads_count = 20
-    completed_requests = 0
+    duration = 60  # 1 minute for progress bar
     start_time = time.time()
-    duration = 10  # 10 seconds test duration
     
     def send_request():
         try:
@@ -57,17 +87,7 @@ def run_test_with_countdown(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             return 0
     
-    def update_countdown(remaining):
-        minutes = remaining // 60
-        seconds = remaining % 60
-        context.bot.edit_message_text(
-            chat_id=update.effective_chat.id,
-            message_id=countdown_msg_id,
-            text=f"ခနစောင့်ပါ...\n{minutes}:{seconds:02d}"
-        )
-    
-    def update_progress(completed):
-        percent = min(100, int((completed/total_requests)*100))
+    def update_progress(percent):
         bars = '█' * int(percent/10)
         spaces = '░' * (10 - int(percent/10))
         progress_text = f"Loading Process...\n{percent}% [{bars}{spaces}]"
@@ -76,54 +96,59 @@ def run_test_with_countdown(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message_id=progress_msg_id,
             text=progress_text
         )
-        return percent
     
-    # Run test for 10 seconds
+    # Run test for 1 minute
     while time.time() - start_time < duration:
-        # Update countdown
-        remaining_time = int(duration - (time.time() - start_time))
-        update_countdown(remaining_time)
+        elapsed = time.time() - start_time
+        percent = min(100, int((elapsed/duration)*100))
         
-        # Send requests
+        # Send some requests (not too many to avoid rate limiting)
         threads = []
-        successful_requests = 0
-        
         for _ in range(threads_count):
-            t = threading.Thread(target=lambda: [send_request() for _ in range(5)])
+            t = threading.Thread(target=send_request)
             threads.append(t)
             t.start()
         
         for t in threads:
             t.join()
         
-        completed_requests += threads_count * 5
-        current_percent = update_progress(completed_requests)
-        
-        # Sleep briefly to prevent too many updates
-        time.sleep(0.5)
+        update_progress(percent)
+        time.sleep(1)
     
-    # Final updates after test completes
-    update_countdown(0)
-    update_progress(total_requests)
+    # Test completed, show results
+    show_results(update, context)
+
+def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show test results with Again button"""
+    progress_msg_id = context.user_data['progress_msg_id']
     
-    # Show completion message with "Again" button
+    # Delete progress message after 10 seconds
+    time.sleep(10)
+    try:
+        context.bot.delete_message(
+            chat_id=update.effective_chat.id,
+            message_id=progress_msg_id
+        )
+    except:
+        pass
+    
+    # Send results with Again button
     keyboard = [[InlineKeyboardButton("Again", callback_data="test_again")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    context.bot.edit_message_text(
+    context.bot.send_message(
         chat_id=update.effective_chat.id,
-        message_id=progress_msg_id,
-        text=f"လုပ်ဆောင်မှုပြီးမြောက်ပါပြီ ✓\nThreads: {threads_count} | Requests: {completed_requests}",
+        text="လုပ်ဆောင်မှုပြီးမြောက်ပါပြီ ✓\nThreads: 20 | Requests: 50",
         reply_markup=reply_markup
     )
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle button callbacks"""
+    """Handle Again button callback"""
     query = update.callback_query
     await query.answer()
     
     if query.data == "test_again":
-        # Delete old progress message
+        # Delete old result message
         try:
             await context.bot.delete_message(
                 chat_id=query.message.chat_id,
@@ -132,8 +157,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
         
-        # Restart the test
-        await start_test_sequence(update, context)
+        # Restart the process
+        await start_countdown(update, context)
 
 def main():
     """Start the bot"""
